@@ -1,27 +1,41 @@
-// FRAGMENTO para AGREGAR dentro de service cloud.firestore y su
-// match /databases/{database}/documents EXISTENTE en Firebase Console.
-// NO reemplazar todas las reglas existentes sin revisarlas.
+// PEGAR DENTRO DE match /databases/{database}/documents
+// Conservá las reglas existentes de /users/{userId}.
 //
-// BETA ADMIN ONLY: la versión pública no debe dar acceso a clientes anónimos.
-// Las reglas previas de /users/{uid} deben conservarse.
-function kuimbaeBetaAdmin() {
-  return request.auth != null
-    && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-    && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
-    && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active != false;
+// Acepta únicamente administradores activos para la versión BETA.
+// Reutiliza la función isAdmin() ya definida por el proyecto.
+function isBetaAdmin() {
+  return isAdmin()
+    && get(/databases/$(database)/documents/users/$(request.auth.uid))
+         .data.get('active', true) == true;
 }
+
 match /shops/{shopId}/datasets/{datasetId} {
-  allow get, list: if shopId == 'kuimbae-style' && kuimbaeBetaAdmin();
-  allow create, update: if shopId == 'kuimbae-style' && kuimbaeBetaAdmin()
-    && datasetId in ['barbers', 'appointments', 'services', 'cash', 'clientMeta', 'settings', 'products']
-    && request.resource.data.keys().hasOnly(['data', 'version', 'updatedAt', 'updatedBy'])
-    && request.resource.data.keys().hasAll(['data', 'version', 'updatedAt', 'updatedBy'])
+  allow get, list: if shopId == 'kuimbae-style'
+    && isBetaAdmin();
+
+  allow create, update: if shopId == 'kuimbae-style'
+    && isBetaAdmin()
+    && datasetId in [
+      'barbers', 'appointments', 'services', 'cash',
+      'clientMeta', 'settings', 'products'
+    ]
+    && request.resource.data.keys().hasOnly([
+      'data', 'version', 'updatedAt', 'updatedBy'
+    ])
+    && request.resource.data.keys().hasAll([
+      'data', 'version', 'updatedAt', 'updatedBy'
+    ])
     && request.resource.data.version == 1
     && request.resource.data.updatedBy == request.auth.uid
+    && request.resource.data.updatedAt is timestamp
     && (
-      (datasetId in ['clientMeta','settings'] && request.resource.data.data is map)
-      || (datasetId in ['barbers','appointments','services','cash','products']
-          && request.resource.data.data is list)
+      (datasetId in ['clientMeta', 'settings']
+        && request.resource.data.data is map)
+      ||
+      (datasetId in ['barbers', 'appointments', 'services',
+                     'cash', 'products']
+        && request.resource.data.data is list)
     );
+
   allow delete: if false;
 }
