@@ -1,0 +1,27 @@
+// FRAGMENTO para AGREGAR dentro de service cloud.firestore y su
+// match /databases/{database}/documents EXISTENTE en Firebase Console.
+// NO reemplazar todas las reglas existentes sin revisarlas.
+//
+// BETA ADMIN ONLY: la versión pública no debe dar acceso a clientes anónimos.
+// Las reglas previas de /users/{uid} deben conservarse.
+function kuimbaeBetaAdmin() {
+  return request.auth != null
+    && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+    && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+    && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active != false;
+}
+match /shops/{shopId}/datasets/{datasetId} {
+  allow get, list: if shopId == 'kuimbae-style' && kuimbaeBetaAdmin();
+  allow create, update: if shopId == 'kuimbae-style' && kuimbaeBetaAdmin()
+    && datasetId in ['barbers', 'appointments', 'services', 'cash', 'clientMeta', 'settings', 'products']
+    && request.resource.data.keys().hasOnly(['data', 'version', 'updatedAt', 'updatedBy'])
+    && request.resource.data.keys().hasAll(['data', 'version', 'updatedAt', 'updatedBy'])
+    && request.resource.data.version == 1
+    && request.resource.data.updatedBy == request.auth.uid
+    && (
+      (datasetId in ['clientMeta','settings'] && request.resource.data.data is map)
+      || (datasetId in ['barbers','appointments','services','cash','products']
+          && request.resource.data.data is list)
+    );
+  allow delete: if false;
+}
