@@ -40,7 +40,13 @@ export function auditBackup(backup) {
   // Una copia corrupta o parcialmente cargada NO debe usarse para migrar.
   if(errors.some(e=>e.code==='MISSING_LIST'))return {ok:false,counts,summary,errors,warnings};
   const barberIds=new Set(collections.barbers.map(x=>x?.id).filter(validId));
+  const activeServiceNames=new Set(collections.services.map(x=>x?.name).filter(validId));
+  const appointmentServiceNames=new Map();
   for(const [idx,a] of collections.appointments.entries()){
+    if(validId(a?.service) && !activeServiceNames.has(a.service)){
+      warn('MISSING_ACTIVE_SERVICE','Turno #'+idx+' refiere un servicio que ya no figura en el catálogo.');
+      appointmentServiceNames.set(a.service,(appointmentServiceNames.get(a.service)||0)+1);
+    }
     if(!a||!validId(a.barberId)||!barberIds.has(a.barberId))
       fail('APPOINTMENT_BARBER_UNKNOWN','Turno #'+idx+' no tiene barberId correspondiente a barbers.');
     if(!isoDate(a?.date)||!hour(a?.time))
@@ -66,6 +72,8 @@ export function auditBackup(backup) {
     else if(!barberIds.has(s.barberId))
       fail('SERVICE_BARBER_UNKNOWN','Servicio #'+idx+' tiene barberId desconocido.');
   }
+  summary.appointmentsMissingActiveService=warnings.filter(x=>x.code==='MISSING_ACTIVE_SERVICE').length;
+  summary.distinctMissingServiceNames=appointmentServiceNames.size;
   summary.unattributedProductSales=warnings.filter(x=>x.code==='UNATTRIBUTED_PRODUCT_SALE').length;
   summary.sharedServices=warnings.filter(x=>x.code==='SHARED_SERVICE').length;
   summary.cashGross=collections.cash.reduce((sum,c)=>sum+(Number.isFinite(Number(c?.amount))?Number(c.amount):0),0);
