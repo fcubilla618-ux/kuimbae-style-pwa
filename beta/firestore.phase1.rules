@@ -1,0 +1,129 @@
+// BORRADOR PARA EMULADOR. NO PUBLICAR EN FIREBASE SIN PRUEBAS.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function profilePath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+    function hasProfile() {
+      return signedIn() && exists(profilePath());
+    }
+    function profile() { return get(profilePath()).data; }
+    function isAdmin() {
+      return hasProfile() && profile().role == 'admin';
+    }
+    function isActiveAdmin() {
+      return isAdmin() && profile().get('active', true) == true;
+    }
+    function isActiveBarber() {
+      return hasProfile() && profile().role == 'barber'
+        && profile().get('active', false) == true
+        && profile().get('barberId', '') is string
+        && profile().get('barberId', '') != '';
+    }
+    function staff() { return isActiveAdmin() || isActiveBarber(); }
+    function ownBarberId() { return profile().barberId; }
+    function own(data) {
+      return isActiveBarber() && data.barberId == ownBarberId();
+    }
+    function inShop(shopId) { return shopId == 'kuimbae-style'; }
+    // Cuentas: ningun barbero puede elevar su propio rol ni vincular otro barberId.
+    match /users/{userId} {
+      allow get: if signedIn() && (request.auth.uid == userId || isAdmin());
+      allow list, create, update, delete: if isAdmin();
+    }
+
+    // V1: conservar las restricciones de la BETA publicada.
+    match /shops/{shopId}/datasets/{datasetId} {
+      allow get, list: if inShop(shopId) && isActiveAdmin();
+      allow create, update: if inShop(shopId) && isActiveAdmin()
+        && datasetId in ['barbers','appointments','services','cash','clientMeta','settings','products']
+        && request.resource.data.keys().hasOnly(['data','version','updatedAt','updatedBy'])
+        && request.resource.data.keys().hasAll(['data','version','updatedAt','updatedBy'])
+        && request.resource.data.version == 1
+        && request.resource.data.updatedBy == request.auth.uid
+        && request.resource.data.updatedAt is timestamp
+        && (
+          (datasetId in ['clientMeta','settings'] && request.resource.data.data is map)
+          || (datasetId in ['barbers','appointments','services','cash','products']
+             && request.resource.data.data is list)
+        );
+      allow delete: if false;
+    }
+
+    // V2: UN DOCUMENTO POR TURNO. Nunca leer la lista V1 desde perfiles barber.
+    // Las consultas de barberos deben llevar where('barberId','==',profile.barberId).
+    match /shops/{shopId}/v2Appointments/{appointmentId} {
+      allow get, list: if inShop(shopId) && (isActiveAdmin() || own(resource.data));
+      allow create: if inShop(shopId) &&
+        (isActiveAdmin() ||
+          (own(request.resource.data) && validAppointment(request.resource.data,appointmentId)
+           && request.resource.data.createdBy == request.auth.uid
+           && request.resource.data.updatedBy == request.auth.uid));
+      allow update: if inShop(shopId) &&
+        (isActiveAdmin() ||
+          (own(resource.data) && own(request.resource.data)
+           && validAppointment(request.resource.data,appointmentId)
+           && request.resource.data.createdBy == resource.data.createdBy
+           && request.resource.data.createdAt == resource.data.createdAt
+           && request.resource.data.updatedBy == request.auth.uid));
+      allow delete: if inShop(shopId) && (isActiveAdmin() || own(resource.data));
+    }
+    function validAppointment(d,id) {
+      return d.keys().hasOnly([
+          'id','barberId','client','phone','date','time','duration',
+          'serviceId','service','price','status','notes',
+          'createdBy','updatedBy','createdAt','updatedAt'
+        ])
+        && d.keys().hasAll([
+          'id','barberId','client','date','time','status',
+          'createdBy','updatedBy','createdAt','updatedAt'
+        ])
+        && d.id == id && d.client is string && d.date is string
+        && d.time is string && d.barberId is string
+        && d.status in ['pendiente','atendido','cancelado']
+        && d.createdAt is timestamp && d.updatedAt is timestamp;
+    }
+
+    // Servicios y precios PRIVADOS de cada barbero.
+    match /shops/{shopId}/v2Services/{serviceId} {
+      allow get, list: if inShop(shopId) && (isActiveAdmin() || own(resource.data));
+      allow create: if inShop(shopId) &&
+        (isActiveAdmin() || (own(request.resource.data) &&
+           validService(request.resource.data,serviceId)));
+      allow update: if inShop(shopId) &&
+        (isActiveAdmin() || (own(resource.data) && own(request.resource.data)
+           && validService(request.resource.data,serviceId)));
+      allow delete: if inShop(shopId) && (isActiveAdmin() || own(resource.data));
+    }
+    function validService(d,id) {
+      return d.keys().hasOnly(['id','barberId','name','price','duration','active','updatedAt'])
+        && d.keys().hasAll(['id','barberId','name','price','active'])
+        && d.id == id && d.name is string && d.barberId is string
+        && d.price is number && d.price >= 0 && d.active is bool;
+    }
+
+    // Catálogo público a empleados: NO almacenar costos internos en estos documentos.
+    // Sólo admin cambia precio, stock y productos.
+    match /shops/{shopId}/v2Products/{productId} {
+      allow get, list: if inShop(shopId) && staff();
+      allow create, update, delete: if inShop(shopId) && isActiveAdmin();
+    }
+    // Costos de inventario separados, accesibles únicamente al administrador.
+    match /shops/{shopId}/v2ProductCosts/{productId} {
+      allow read, write: if inShop(shopId) && isActiveAdmin();
+    }
+    // Ventas y caja son registros contables: desde los celulares, SÓLO lectura.
+    // Una función de servidor verificará vendedor, precio, stock y registrará
+    // la venta con decremento de inventario en una transacción indivisible.
+    match /shops/{shopId}/v2Sales/{saleId} {
+      allow get, list: if inShop(shopId) && (isActiveAdmin() || own(resource.data));
+      allow create, update, delete: if false;
+    }
+    match /shops/{shopId}/v2Cash/{cashId} {
+      allow get, list: if inShop(shopId) && (isActiveAdmin() || own(resource.data));
+      allow create, update, delete: if false;
+    }
+  }
+}
